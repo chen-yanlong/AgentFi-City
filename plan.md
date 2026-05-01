@@ -43,16 +43,16 @@ The 0G bounty specifically rewards autonomous agents, swarms, persistent memory 
 
 ## Longer Description
 
-AgentFi City is a multi-agent system where each agent behaves like an onchain economic actor.
+AgentFi City is a **4-agent swarm** (Planner + Researcher + Critic + Executor) where each agent behaves like an onchain economic actor.
 Each agent has:
 
 * a role,
 * a wallet,
-* memory,
-* communication ability,
-* and basic decision-making logic.
+* persistent memory on 0G Storage (read AND write — decisions are informed by past outcomes),
+* peer-to-peer communication via AXL (separate processes, no central broker),
+* LLM-based decision-making (with at least one call routed through 0G Compute).
 
-Agents coordinate through a peer-to-peer communication layer, complete tasks together, and settle rewards onchain through a smart contract.
+Agents coordinate through AXL P2P, the Critic validates Researcher output before settlement, and rewards settle onchain through a smart contract.
 
 After receiving rewards, agents can use the Uniswap API to perform token swaps, demonstrating that they are not just chatbots, but financial actors capable of operating onchain.
 
@@ -60,40 +60,53 @@ After receiving rewards, agents can use the Uniswap API to perform token swaps, 
 
 # 2. Bounty Strategy
 
-## 2.1 0G — Autonomous Agents
+## 2.1 0G — Autonomous Agents & Swarms
+
+### Track name (corrected)
+
+We target the **”Best Autonomous Agents, Swarms & iNFT Innovations”** track ($7,500 pool, **5 × $1,500** slots). NOT the framework track — that's for OpenClaw extensions/forks/agent-brain libraries.
 
 ### What the bounty wants
 
-The 0G autonomous agent bounty is focused on actual agents, swarms, long-running goal-driven behavior, persistent memory, and 0G infrastructure usage. The bounty text highlights agents with persistent context on 0G Storage, self-fact-checking, specialist swarms, and iNFT-based agents. 
+The bounty rewards:
+
+* specialist agent swarms — the bounty literally names “planner + researcher + critic + executor”,
+* shared 0G Storage memory using both KV (real-time state) and Log (history),
+* coordinated inference on 0G Compute with a live model (queried at runtime via `broker.inference.listService()` — the catalog changes, do not hard-code names),
+* persistent context that affects future behavior (not write-only memory),
+* clear explanation of how agents communicate and coordinate.
 
 ### How AgentFi City fits
 
-AgentFi City includes:
+AgentFi City is a **4-agent swarm**:
 
-* multiple agents,
-* role-based collaboration,
-* task memory,
-* agent decision logs,
-* 0G Storage integration,
-* optional 0G Compute reasoning.
+* **Planner** — broadcasts tasks, forms teams
+* **Researcher** — produces research output
+* **Critic** — validates Researcher output before settlement (added to match the bounty's literal pattern)
+* **Executor** — submits completion, swaps reward
 
-### Minimum required implementation
+Each agent:
+
+* reads its past memories from 0G Storage Log before deciding to join,
+* writes new decisions/results to 0G Storage (KV for live state, Log for history),
+* uses 0G Compute for at least one reasoning call.
+
+### Minimum required implementation (REQUIRED — not optional)
 
 For MVP:
 
-* Store agent memory and task history in 0G Storage.
-* Show at least one agent decision based on previous memory.
-* Include three working agents:
-
-  * Planner Agent
-  * Researcher Agent
-  * Executor Agent
+* **0G Storage write**: save agent memory and task history.
+* **0G Storage read-back**: at least one agent decision must be informed by previously-saved memory. The decision JSON must reference the past memory it read.
+* **0G Compute call**: at least one decision must use a live model on 0G Compute. Query the available models at runtime via `broker.inference.listService()` — do not hard-code model names. Show the request/response (including the resolved model name) in the UI.
+* **4 agents**: Planner, Researcher, Critic, Executor — each running as a separate process.
+* **Two-run demo**: first run with empty memory, second run shows agents making different/more confident decisions because of read-back.
+* **Contract deployed on 0G testnet** with explorer link in README.
 
 ### Nice-to-have
 
-* Use 0G Compute for one reasoning call.
-* Mint agent identity as an iNFT / Agentic ID if time allows.
-* Add a simple “agent reputation” score stored in memory.
+* Mint agent identity as iNFT (ERC-7857) — high time cost, park unless ahead of schedule.
+* Reputation score that evolves with completed tasks, stored in 0G Storage KV.
+* Self-fact-checking — Critic uses a second 0G Compute call to verify Researcher's output.
 
 ---
 
@@ -118,20 +131,25 @@ Executor Agent → confirms execution
 Planner Agent → confirms team formation
 ```
 
+### Reference implementation
+
+Mirror the pattern of Gensyn's **Collaborative Autoresearch Demo** (`github.com/gensyn-ai/collaborative-autoresearch-demo`) — researchers collaborating via AXL, which maps directly to our use case.
+
 ### Minimum required implementation
 
 For MVP:
 
-* Run at least two separate agent nodes/processes.
-* Have them communicate through AXL.
-* Log AXL messages in the frontend.
-* Do not replace AXL with a centralized message broker.
+* Run **all 4 agents as separate processes** (Planner, Researcher, Critic, Executor) — each with its own AXL node.
+* All inter-agent messages flow through AXL — no centralized broker, no in-process shortcuts.
+* Use A2A-style structured message schema.
+* Frontend shows: peer discovery (which nodes connected), live AXL message stream, message direction (from→to).
+* Logs prove this is real P2P, not faked.
 
 ### Nice-to-have
 
-* Run Planner, Researcher, and Executor as three separate nodes.
-* Use A2A-style structured message schema.
-* Add peer discovery screen in frontend.
+* Peer discovery screen showing AXL mesh topology.
+* MCP-style structured tool calls between agents (the bounty mentions MCP support).
+* Encrypted message inspection panel showing AXL's E2E encryption.
 
 ---
 
@@ -156,40 +174,50 @@ Uniswap API provides quote and transaction
 Agent wallet executes swap
 ```
 
+### Chain and API commitment
+
+* **Chain**: **Base Sepolia** (testnet that supports Uniswap with reliable RPC). Backup: Sepolia.
+* **API**: Uniswap **Trading API** at `https://trade-api.gateway.uniswap.org/v1` — `/quote` + `/swap` endpoints.
+* Smart contract deploys to **two networks**: Base Sepolia (for Uniswap visibility) and 0G testnet (for 0G bounty visibility).
+
 ### Minimum required implementation
 
 For MVP:
 
-* Use Uniswap API to get a quote.
-* Build or execute a swap transaction.
-* Show quote result and transaction hash in frontend.
-* Add `FEEDBACK.md`.
+* Use Uniswap Trading API to get a real quote (`/quote` endpoint).
+* **Execute the swap** with the agent's wallet — actual onchain transaction, not just "show prepared tx" (that's the demo-day fallback only).
+* Show quote payload, tx hash, and **clickable Etherscan/Basescan link** in frontend.
+* `FEEDBACK.md` must be **substantive** (10+ specific bullets per section, not skeleton). It's graded.
 
 ### Nice-to-have
 
-* Let agent choose swap percentage based on simple strategy.
+* Agent chooses swap percentage based on simple strategy.
 * Compare two routes / tokens.
-* Add risk guardrails:
-
-  * max slippage,
-  * max trade size,
-  * testnet-only mode.
+* Risk guardrails: max slippage, max trade size, testnet-only mode.
 
 ---
 
 # 3. MVP Scope
 
-## The MVP should prove one full lifecycle
+## The MVP should prove one full lifecycle (run twice)
 
 ```txt
 Task Created
-→ Agents Coordinate
+→ Agents read past memory from 0G Storage
+→ Agents Coordinate via AXL
 → Team Formed
+→ Researcher Produces Output
+→ Critic Validates via 0G Compute
 → Task Executed
 → Reward Settled Onchain
-→ Agent Swaps Token
-→ Memory Saved
+→ Agent Swaps Token via Uniswap
+→ Memory Saved to 0G Storage
 ```
+
+**Run the demo twice during the pitch:**
+
+1. **Run 1 (cold start)**: empty memory, agents make baseline decisions.
+2. **Run 2 (memory-informed)**: agents read Run 1 memories, decisions cite past outcomes, confidence shifts. This is the bounty-critical proof that memory affects behavior.
 
 This flow is more important than building a complex autonomous economy.
 
@@ -234,12 +262,12 @@ The demo can be semi-orchestrated, as long as the key infra integrations are rea
 │   Demo Orchestrator         │
 └─────────────┬──────────────┘
               │
- ┌────────────┼────────────┐
- ↓            ↓            ↓
-Planner    Researcher    Executor
-Agent      Agent         Agent
-Node       Node          Node
- ↓            ↓            ↓
+ ┌────────┬───┴───┬────────┐
+ ↓        ↓       ↓        ↓
+Planner Researcher Critic Executor
+Agent    Agent     Agent  Agent
+Node     Node      Node   Node
+ ↓        ↓       ↓        ↓
 ┌────────────────────────────┐
 │        Gensyn AXL           │
 │ P2P agent communication     │
@@ -453,6 +481,7 @@ agentfi-city/
 │   │   ├── base_agent.py
 │   │   ├── planner_agent.py
 │   │   ├── researcher_agent.py
+│   │   ├── critic_agent.py
 │   │   └── executor_agent.py
 │   ├── services/
 │   │   ├── axl_service.py
@@ -499,7 +528,7 @@ agentfi-city/
 type Agent = {
   id: string;
   name: string;
-  role: "planner" | "researcher" | "executor";
+  role: "planner" | "researcher" | "critic" | "executor";
   walletAddress: string;
   status: "idle" | "listening" | "negotiating" | "working" | "paid" | "swapped";
   memoryKey?: string;
@@ -545,7 +574,10 @@ type DemoEvent = {
     | "contract_tx"
     | "uniswap_quote"
     | "uniswap_swap"
+    | "memory_read"
     | "memory_write"
+    | "compute_call"
+    | "critic_review"
     | "error";
   message: string;
   metadata?: Record<string, unknown>;
@@ -692,6 +724,19 @@ But do not start with ERC-20 unless necessary. Native token flow is easier for d
 
 ## Agents
 
+### Memory-read step (applies to ALL agents)
+
+Before any `should_join` or `should_approve` decision, the agent:
+
+1. reads its past memories from 0G Storage Log (filtered by agent_id),
+2. includes a summary of past decisions and outcomes in the LLM prompt,
+3. emits a `memory_read` event to the UI showing what it loaded,
+4. references the past memory in the decision JSON's `reason` field.
+
+This is the **0G read-back loop** — required for the bounty.
+
+---
+
 ### Planner Agent
 
 Responsibilities:
@@ -705,7 +750,9 @@ Responsibilities:
 Decision rule:
 
 ```txt
-If task reward > 0 and at least two agents reply, form team.
+1. Read past memory: which task types succeeded before?
+2. If task reward > 0 and at least two agents reply with capability match, form team.
+3. Use 0G Compute (qwen3.6-plus) to choose team composition when multiple options exist.
 ```
 
 ---
@@ -722,8 +769,33 @@ Responsibilities:
 Decision rule:
 
 ```txt
-If task contains "research", "analyze", "market", or "summary", join.
+1. Read past memory: have I succeeded at similar tasks before?
+2. If task contains "research", "analyze", "market", or "summary", join.
+3. On second run, prior success increases confidence (lower risk_level).
 ```
+
+---
+
+### Critic Agent (NEW)
+
+Responsibilities:
+
+* listens for Researcher output,
+* validates the output against the task description,
+* either approves or sends revision request via AXL,
+* gates settlement — Executor cannot complete the task until Critic approves.
+
+Decision rule:
+
+```txt
+1. Read Researcher's output from AXL.
+2. Read past critique memory from 0G Storage.
+3. Use 0G Compute to evaluate: does the output address the task?
+4. Emit APPROVE or REJECT_WITH_REASON message via AXL.
+5. Save critique to 0G Storage Log.
+```
+
+This is the **self-fact-checking** capability the 0G bounty highlights.
 
 ---
 
@@ -733,6 +805,7 @@ Responsibilities:
 
 * listens for tasks,
 * replies if task requires execution,
+* waits for Critic approval before submitting completion,
 * submits completion,
 * receives reward,
 * swaps token using Uniswap.
@@ -740,8 +813,11 @@ Responsibilities:
 Decision rule:
 
 ```txt
-If reward exists and task requires execution, join.
-After reward settlement, swap 30% of reward.
+1. Read past memory: prior reward outcomes and swap results.
+2. If reward exists and task requires execution, join.
+3. After Critic approval, submit completion onchain.
+4. After reward settlement, swap 30% of reward via Uniswap Trading API.
+5. Save full task memory (decision + reward + swap tx) to 0G Storage.
 ```
 
 ---
@@ -852,12 +928,30 @@ At least two agent processes must exchange messages through AXL.
 
 ## Required 0G features
 
-Use 0G Storage for:
+### 0G Storage (required, both KV and Log)
 
-* task memory,
-* agent decision logs,
-* final task result,
-* maybe agent profile.
+Use **0G Storage KV** for:
+
+* live agent state (current status, current task, reputation score),
+* "session" data that needs fast read-write during demo runs.
+
+Use **0G Storage Log** for:
+
+* task memory entries (one append per task),
+* agent decision history,
+* Critic critiques and approvals,
+* final task results.
+
+The bounty rewards using **both** storage modes. KV for real-time, Log for history.
+
+### 0G Compute (required — promoted from optional)
+
+At least one decision must use a live model on 0G Compute:
+
+* Resolve the model at runtime: `await broker.inference.listService()` returns the current providers and models. Pick one and pass it through to `getServiceMetadata`. Do not hard-code model names — the 0G catalog changes.
+* The Critic agent's validation call is the natural fit (it's already a reasoning step).
+* Show the request payload, model name, and response in the UI.
+* If 0G Compute integration blocks the demo, fall back to OpenAI for non-Critic agents but keep Critic on 0G Compute as the bounty-touching path.
 
 0G docs describe Storage SDK support for uploading, downloading, key-value storage, browser support, and encryption/decryption. ([0G Documentation][3])
 
@@ -894,16 +988,20 @@ Then makes decision:
 I will join this task because similar research tasks were completed successfully before.
 ```
 
-## Optional 0G Compute
+## 0G Compute usage (required)
 
-Use 0G Compute for one reasoning call:
+Critic agent validation call:
 
 ```txt
-Planner asks 0G Compute:
-"Given these agents and their capabilities, which agents should join the task?"
+Critic asks 0G Compute (live model from broker.inference.listService()):
+"Given task description '{task}' and Researcher output '{output}',
+ does the output substantively address the task?
+ Return JSON: {approved: bool, reason: string, confidence: 0-1}"
 ```
 
-If 0G Compute integration is too time-consuming, prioritize 0G Storage first.
+Show the request and response in the UI's MemoryPanel. The model name in the response payload is the bounty-visible proof.
+
+Secondary 0G Compute call (nice-to-have): Planner uses 0G Compute to pick team composition when multiple agents claim the same capability.
 
 ---
 
@@ -911,11 +1009,14 @@ If 0G Compute integration is too time-consuming, prioritize 0G Storage first.
 
 ## Required Uniswap features
 
-Use Uniswap API for:
-
-1. quote,
-2. transaction generation,
-3. swap execution or demo transaction.
+* **API**: Uniswap **Trading API** at `https://trade-api.gateway.uniswap.org/v1`
+* **Endpoints used**: `POST /quote` for routing + price, `POST /swap` for transaction building
+* **Chain**: Base Sepolia (primary), Sepolia (backup)
+* **Flow**:
+  1. Agent calls `/quote` with `tokenIn`, `tokenOut`, `amount`
+  2. Agent calls `/swap` to get transaction calldata
+  3. Agent signs and broadcasts via its own wallet
+  4. UI displays quote payload + tx hash + Etherscan/Basescan link
 
 The Uniswap API docs describe API endpoints that abstract away smart contract complexity and use routing logic / intent-based swapping systems. ([Uniswap Developers][4])
 
@@ -1145,8 +1246,19 @@ async def run_demo():
     emit("contract_tx", "Agents joining task")
     join_txs = await contract.join_task(task, team)
 
-    emit("agent_decision", "Agents executing task")
-    result = await execute_task(task, team)
+    emit("agent_decision", "Researcher executing task")
+    research_output = await researcher.produce_output(task)
+
+    emit("agent_decision", "Critic validating Researcher output via 0G Compute")
+    critique = await critic.validate_via_og_compute(task, research_output)
+    if not critique["approved"]:
+        emit("agent_decision", f"Critic rejected: {critique['reason']}")
+        # In demo, Researcher revises once
+        research_output = await researcher.revise(task, critique)
+        critique = await critic.validate_via_og_compute(task, research_output)
+
+    emit("agent_decision", "Critic approved — Executor finalizing")
+    result = await executor.finalize(task, research_output)
 
     emit("contract_tx", "Completing task")
     complete_tx = await contract.complete_task(task)
