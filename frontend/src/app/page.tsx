@@ -25,10 +25,17 @@ const INITIAL_AGENTS: Agent[] = [
     status: "idle",
   },
   {
+    id: "critic-001",
+    name: "Critic",
+    role: "critic",
+    wallet_address: "0x0000000000000000000000000000000000000003",
+    status: "idle",
+  },
+  {
     id: "executor-001",
     name: "Executor",
     role: "executor",
-    wallet_address: "0x0000000000000000000000000000000000000003",
+    wallet_address: "0x0000000000000000000000000000000000000004",
     status: "idle",
   },
 ];
@@ -89,6 +96,7 @@ export default function Home() {
       "task_created",
       "axl_message",
       "agent_decision",
+      "critic_review",
       "contract_tx",
       "uniswap_quote",
       "uniswap_swap",
@@ -178,7 +186,7 @@ export default function Home() {
         <div className="max-w-6xl mx-auto space-y-4">
           {/* Agent cards */}
           <section>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               {agents.map((agent) => (
                 <AgentCard key={agent.id} agent={agent} />
               ))}

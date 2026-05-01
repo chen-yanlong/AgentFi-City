@@ -7,6 +7,7 @@ from pydantic import BaseModel
 class AgentRole(str, Enum):
     PLANNER = "planner"
     RESEARCHER = "researcher"
+    CRITIC = "critic"
     EXECUTOR = "executor"
 
 
@@ -15,6 +16,7 @@ class AgentStatus(str, Enum):
     LISTENING = "listening"
     NEGOTIATING = "negotiating"
     WORKING = "working"
+    REVIEWING = "reviewing"
     PAID = "paid"
     SWAPPED = "swapped"
 

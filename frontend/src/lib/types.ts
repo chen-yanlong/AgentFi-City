@@ -1,10 +1,11 @@
-export type AgentRole = "planner" | "researcher" | "executor";
+export type AgentRole = "planner" | "researcher" | "critic" | "executor";
 
 export type AgentStatus =
   | "idle"
   | "listening"
   | "negotiating"
   | "working"
+  | "reviewing"
   | "paid"
   | "swapped";
 
@@ -44,6 +45,7 @@ export type EventType =
   | "task_created"
   | "axl_message"
   | "agent_decision"
+  | "critic_review"
   | "contract_tx"
   | "uniswap_quote"
   | "uniswap_swap"

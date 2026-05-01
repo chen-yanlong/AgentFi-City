@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     # Wallets
     planner_private_key: str = ""
     researcher_private_key: str = ""
+    critic_private_key: str = ""
     executor_private_key: str = ""
     task_creator_private_key: str = ""
 
@@ -32,7 +33,8 @@ class Settings(BaseSettings):
     # AXL
     axl_planner_url: str = "http://localhost:7001"
     axl_researcher_url: str = "http://localhost:7002"
-    axl_executor_url: str = "http://localhost:7003"
+    axl_critic_url: str = "http://localhost:7003"
+    axl_executor_url: str = "http://localhost:7004"
 
     # LLM
     openai_api_key: str = ""

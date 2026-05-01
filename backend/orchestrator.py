@@ -111,7 +111,34 @@ async def run_demo() -> None:
     task.status = TaskStatus.TEAM_FORMING
     await _step()
 
-    # --- Step 4: Executor receives and decides to join ---
+    # --- Step 4a: Critic receives and decides to join ---
+    state.set_agent_status("critic-001", AgentStatus.LISTENING)
+    state.emit_event(
+        EventType.AXL_MESSAGE,
+        "Critic",
+        "Received task announcement via AXL",
+        {"from": "planner-001", "to": "critic-001"},
+    )
+    await _step(1.0)
+
+    state.set_agent_status("critic-001", AgentStatus.NEGOTIATING)
+    state.emit_event(
+        EventType.AGENT_DECISION,
+        "Critic",
+        'Decision: JOIN — task output requires validation. Reason: "I will fact-check the Researcher\'s output before settlement."',
+        {"agent_id": "critic-001", "decision": "join", "capability": "validation"},
+    )
+    await _step(0.8)
+
+    state.emit_event(
+        EventType.AXL_MESSAGE,
+        "Critic",
+        "Sent JOIN_PROPOSAL to Planner via AXL",
+        {"from": "critic-001", "to": "planner-001", "msg_type": "JOIN_PROPOSAL"},
+    )
+    await _step()
+
+    # --- Step 4b: Executor receives and decides to join ---
     state.set_agent_status("executor-001", AgentStatus.LISTENING)
     state.emit_event(
         EventType.AXL_MESSAGE,
@@ -142,11 +169,11 @@ async def run_demo() -> None:
     state.emit_event(
         EventType.AGENT_DECISION,
         "Planner",
-        "Received 2 join proposals. Forming team: [Researcher, Executor]",
-        {"team": ["researcher-001", "executor-001"]},
+        "Received 3 join proposals. Forming team: [Researcher, Critic, Executor]",
+        {"team": ["researcher-001", "critic-001", "executor-001"]},
     )
     task.status = TaskStatus.TEAM_FORMED
-    task.participants = ["researcher-001", "executor-001"]
+    task.participants = ["researcher-001", "critic-001", "executor-001"]
     await _step(0.8)
 
     state.emit_event(
@@ -191,7 +218,7 @@ async def run_demo() -> None:
     state.emit_event(
         EventType.CONTRACT_TX,
         "Contract",
-        "Researcher and Executor joining task onchain",
+        "Researcher, Critic, and Executor joining task onchain",
         {"action": "joinTask"},
     )
 
@@ -199,28 +226,31 @@ async def run_demo() -> None:
         researcher_join_tx = await asyncio.to_thread(
             runtime.service.join_task, runtime.researcher.private_key, onchain_id
         )
+        critic_join_tx = await asyncio.to_thread(
+            runtime.service.join_task, runtime.critic.private_key, onchain_id
+        )
         executor_join_tx = await asyncio.to_thread(
             runtime.service.join_task, runtime.executor.private_key, onchain_id
         )
-        task.tx_hashes.extend([researcher_join_tx, executor_join_tx])
-        state.emit_event(
-            EventType.CONTRACT_TX,
-            "Contract",
-            f"Researcher joined — tx: {researcher_join_tx[:20]}...",
-            {"agent": "researcher-001", "tx_hash": researcher_join_tx},
-        )
-        state.emit_event(
-            EventType.CONTRACT_TX,
-            "Contract",
-            f"Executor joined — tx: {executor_join_tx[:20]}...",
-            {"agent": "executor-001", "tx_hash": executor_join_tx},
-        )
+        task.tx_hashes.extend([researcher_join_tx, critic_join_tx, executor_join_tx])
+        for agent_id, tx in [
+            ("researcher-001", researcher_join_tx),
+            ("critic-001", critic_join_tx),
+            ("executor-001", executor_join_tx),
+        ]:
+            state.emit_event(
+                EventType.CONTRACT_TX,
+                "Contract",
+                f"{agent_id} joined — tx: {tx[:20]}...",
+                {"agent": agent_id, "tx_hash": tx},
+            )
     else:
         await _step(1.5)
 
     # --- Step 8: Task execution ---
     task.status = TaskStatus.EXECUTING
     state.set_agent_status("researcher-001", AgentStatus.WORKING)
+    state.set_agent_status("critic-001", AgentStatus.LISTENING)
     state.set_agent_status("executor-001", AgentStatus.WORKING)
     state.emit_event(
         EventType.AGENT_DECISION,
@@ -230,19 +260,70 @@ async def run_demo() -> None:
     )
     await _step(2.0)
 
+    research_output = "ETH sentiment appears cautiously optimistic with increased institutional inflows."
     state.emit_event(
         EventType.AGENT_DECISION,
         "Researcher",
-        'Research complete: "ETH sentiment appears cautiously optimistic with increased institutional inflows."',
-        {"agent_id": "researcher-001", "output": "ETH sentiment cautiously optimistic"},
+        f'Research complete: "{research_output}"',
+        {"agent_id": "researcher-001", "output": research_output},
     )
+    await _step()
+
+    # --- Step 8b: Critic validates Researcher output ---
+    state.set_agent_status("researcher-001", AgentStatus.LISTENING)
+    state.set_agent_status("critic-001", AgentStatus.REVIEWING)
+    state.emit_event(
+        EventType.AXL_MESSAGE,
+        "Researcher",
+        "Sent OUTPUT_FOR_REVIEW to Critic via AXL",
+        {
+            "from": "researcher-001",
+            "to": "critic-001",
+            "msg_type": "OUTPUT_FOR_REVIEW",
+            "output": research_output,
+        },
+    )
+    await _step(1.0)
+
+    state.emit_event(
+        EventType.CRITIC_REVIEW,
+        "Critic",
+        "Validating Researcher output against task requirements...",
+        {
+            "agent_id": "critic-001",
+            "task_description": task.description,
+            "output_under_review": research_output,
+        },
+    )
+    await _step(1.5)
+
+    critique = {
+        "approved": True,
+        "reason": "Output addresses the task: it summarizes recent ETH market sentiment with a directional claim and supporting evidence (institutional inflows).",
+        "confidence": 0.82,
+    }
+    state.emit_event(
+        EventType.CRITIC_REVIEW,
+        "Critic",
+        f'APPROVED (confidence {critique["confidence"]}): {critique["reason"]}',
+        {"agent_id": "critic-001", "verdict": critique},
+    )
+    await _step(0.8)
+
+    state.emit_event(
+        EventType.AXL_MESSAGE,
+        "Critic",
+        "Sent APPROVE to Executor via AXL",
+        {"from": "critic-001", "to": "executor-001", "msg_type": "APPROVE"},
+    )
+    state.set_agent_status("critic-001", AgentStatus.IDLE)
     await _step()
 
     state.emit_event(
         EventType.AGENT_DECISION,
         "Executor",
-        "Compiled final report and submitted task completion",
-        {"agent_id": "executor-001"},
+        "Compiled final report and submitted task completion (Critic approved)",
+        {"agent_id": "executor-001", "critic_approved": True},
     )
     task.status = TaskStatus.COMPLETED
     await _step()
@@ -289,11 +370,12 @@ async def run_demo() -> None:
     else:
         await _step(2.0)
         reward_tx = FAKE_REWARD_TX
-        per_agent_eth = REWARD_ETH / 2
+        per_agent_eth = REWARD_ETH / 3
 
     task.tx_hashes.append(reward_tx)
     task.status = TaskStatus.SETTLED
     state.set_agent_status("researcher-001", AgentStatus.PAID)
+    state.set_agent_status("critic-001", AgentStatus.PAID)
     state.set_agent_status("executor-001", AgentStatus.PAID)
     state.emit_event(
         EventType.CONTRACT_TX,

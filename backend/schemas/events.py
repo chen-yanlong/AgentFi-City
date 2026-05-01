@@ -8,6 +8,7 @@ class EventType(str, Enum):
     TASK_CREATED = "task_created"
     AXL_MESSAGE = "axl_message"
     AGENT_DECISION = "agent_decision"
+    CRITIC_REVIEW = "critic_review"
     CONTRACT_TX = "contract_tx"
     UNISWAP_QUOTE = "uniswap_quote"
     UNISWAP_SWAP = "uniswap_swap"

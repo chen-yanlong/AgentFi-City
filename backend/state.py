@@ -41,10 +41,17 @@ class DemoState:
                 status=AgentStatus.IDLE,
             ),
             Agent(
+                id="critic-001",
+                name="Critic",
+                role=AgentRole.CRITIC,
+                wallet_address="0x0000000000000000000000000000000000000003",
+                status=AgentStatus.IDLE,
+            ),
+            Agent(
                 id="executor-001",
                 name="Executor",
                 role=AgentRole.EXECUTOR,
-                wallet_address="0x0000000000000000000000000000000000000003",
+                wallet_address="0x0000000000000000000000000000000000000004",
                 status=AgentStatus.IDLE,
             ),
         ]

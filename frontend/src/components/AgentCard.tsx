@@ -14,6 +14,7 @@ const STATUS_CONFIG: Record<
     pulse: true,
   },
   working: { label: "Working", color: "bg-accent-purple", pulse: true },
+  reviewing: { label: "Reviewing", color: "bg-amber-300", pulse: true },
   paid: { label: "Paid", color: "bg-accent-green", pulse: false },
   swapped: { label: "Swapped", color: "bg-accent-cyan", pulse: false },
 };
@@ -21,12 +22,14 @@ const STATUS_CONFIG: Record<
 const ROLE_ICON: Record<string, string> = {
   planner: "P",
   researcher: "R",
+  critic: "C",
   executor: "E",
 };
 
 const ROLE_COLOR: Record<string, string> = {
   planner: "border-accent-blue",
   researcher: "border-accent-purple",
+  critic: "border-amber-300",
   executor: "border-accent-green",
 };
 
