@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     og_storage_rpc: str = ""
     og_storage_private_key: str = ""
     og_compute_api_key: str = ""
+    og_compute_sidecar_url: str = "http://localhost:7100"
 
     # AXL
     axl_planner_url: str = "http://localhost:7001"
