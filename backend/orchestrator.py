@@ -13,6 +13,7 @@ from backend.schemas.agent import AgentStatus
 from backend.schemas.task import Task, TaskStatus
 from backend.schemas.events import EventType
 from backend.services.contract_runtime import get_contract_runtime
+from backend.services import llm_service
 
 # Fake tx hashes used when real-contract mode is off
 FAKE_TX = "0x" + "a1b2c3d4e5f6" * 5 + "abcd"
@@ -288,33 +289,39 @@ async def run_demo() -> None:
     state.emit_event(
         EventType.CRITIC_REVIEW,
         "Critic",
-        "Validating Researcher output against task requirements...",
+        "Validating Researcher output via LLM call...",
         {
             "agent_id": "critic-001",
             "task_description": task.description,
             "output_under_review": research_output,
         },
     )
-    await _step(1.5)
 
-    critique = {
-        "approved": True,
-        "reason": "Output addresses the task: it summarizes recent ETH market sentiment with a directional claim and supporting evidence (institutional inflows).",
-        "confidence": 0.82,
-    }
+    critique = await llm_service.validate_research(task.description, research_output)
+    verdict = "APPROVED" if critique.approved else "REJECTED"
     state.emit_event(
         EventType.CRITIC_REVIEW,
         "Critic",
-        f'APPROVED (confidence {critique["confidence"]}): {critique["reason"]}',
-        {"agent_id": "critic-001", "verdict": critique},
+        f"{verdict} (model={critique.model}, confidence={critique.confidence}): {critique.reason}",
+        {
+            "agent_id": "critic-001",
+            "verdict": {
+                "approved": critique.approved,
+                "reason": critique.reason,
+                "confidence": critique.confidence,
+            },
+            "model": critique.model,
+            "raw_response": critique.raw_response,
+        },
     )
     await _step(0.8)
 
+    msg_type = "APPROVE" if critique.approved else "REJECT"
     state.emit_event(
         EventType.AXL_MESSAGE,
         "Critic",
-        "Sent APPROVE to Executor via AXL",
-        {"from": "critic-001", "to": "executor-001", "msg_type": "APPROVE"},
+        f"Sent {msg_type} to Executor via AXL",
+        {"from": "critic-001", "to": "executor-001", "msg_type": msg_type},
     )
     state.set_agent_status("critic-001", AgentStatus.IDLE)
     await _step()
@@ -322,8 +329,8 @@ async def run_demo() -> None:
     state.emit_event(
         EventType.AGENT_DECISION,
         "Executor",
-        "Compiled final report and submitted task completion (Critic approved)",
-        {"agent_id": "executor-001", "critic_approved": True},
+        f"Compiled final report and submitted task completion (Critic {msg_type.lower()}d)",
+        {"agent_id": "executor-001", "critic_approved": critique.approved},
     )
     task.status = TaskStatus.COMPLETED
     await _step()
