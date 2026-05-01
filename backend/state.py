@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -20,6 +21,7 @@ class DemoState:
         self.task: Optional[Task] = None
         self.events: list[DemoEvent] = []
         self.is_running: bool = False
+        self._subscribers: list[asyncio.Queue[DemoEvent]] = []
         self._init_agents()
 
     def _init_agents(self) -> None:
@@ -54,6 +56,26 @@ class DemoState:
         self.is_running = False
         self._init_agents()
 
+    def get_agent(self, agent_id: str) -> Optional[Agent]:
+        for agent in self.agents:
+            if agent.id == agent_id:
+                return agent
+        return None
+
+    def set_agent_status(self, agent_id: str, status: AgentStatus) -> None:
+        agent = self.get_agent(agent_id)
+        if agent:
+            agent.status = status
+
+    def subscribe(self) -> asyncio.Queue[DemoEvent]:
+        queue: asyncio.Queue[DemoEvent] = asyncio.Queue()
+        self._subscribers.append(queue)
+        return queue
+
+    def unsubscribe(self, queue: asyncio.Queue[DemoEvent]) -> None:
+        if queue in self._subscribers:
+            self._subscribers.remove(queue)
+
     def emit_event(
         self,
         event_type: EventType,
@@ -70,6 +92,8 @@ class DemoState:
             metadata=metadata or {},
         )
         self.events.append(event)
+        for queue in self._subscribers:
+            queue.put_nowait(event)
         return event
 
 
