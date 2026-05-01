@@ -31,9 +31,10 @@ build/
 .DS_Store
 Thumbs.db
 
-# Foundry
+# Hardhat
 contracts/cache/
-contracts/out/
+contracts/artifacts/
+contracts/typechain-types/
 
 # Logs
 *.log
