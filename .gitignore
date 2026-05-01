@@ -35,6 +35,8 @@ Thumbs.db
 contracts/cache/
 contracts/artifacts/
 contracts/typechain-types/
+contracts/deployments/localhost.json
+contracts/deployments/hardhat.json
 
 # Logs
 *.log
