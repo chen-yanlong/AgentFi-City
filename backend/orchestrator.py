@@ -1,4 +1,9 @@
-"""Demo orchestration — runs the full fake lifecycle with realistic delays."""
+"""Demo orchestration — runs the full lifecycle.
+
+Contract steps switch between real onchain calls (via TaskMarketService) and
+fake tx hashes based on the USE_REAL_CONTRACT config flag. Uniswap and 0G
+steps remain fake until those services are wired in later commits.
+"""
 
 import asyncio
 import uuid
@@ -7,12 +12,15 @@ from backend.state import demo_state
 from backend.schemas.agent import AgentStatus
 from backend.schemas.task import Task, TaskStatus
 from backend.schemas.events import EventType
+from backend.services.contract_runtime import get_contract_runtime
 
-# Fake tx hashes for the demo
+# Fake tx hashes used when real-contract mode is off
 FAKE_TX = "0x" + "a1b2c3d4e5f6" * 5 + "abcd"
 FAKE_REWARD_TX = "0x" + "f6e5d4c3b2a1" * 5 + "ef01"
 FAKE_SWAP_TX = "0x" + "1234567890ab" * 5 + "cdef"
 FAKE_MEMORY_KEY = "0g://agentfi-city/memory/executor-001/task-001"
+
+REWARD_ETH = 0.01
 
 
 async def _step(delay: float = 1.5):
@@ -26,6 +34,24 @@ async def run_demo() -> None:
     state = demo_state
     state.demo_id = f"demo-{uuid.uuid4().hex[:8]}"
     state.is_running = True
+
+    # Resolve real-contract runtime (None if disabled or no deployment file)
+    runtime = get_contract_runtime()
+    if runtime:
+        # Sync agent wallet addresses to the real ones from the runtime
+        state.get_agent("planner-001").wallet_address = runtime.planner.address
+        state.get_agent("researcher-001").wallet_address = runtime.researcher.address
+        state.get_agent("executor-001").wallet_address = runtime.executor.address
+        state.emit_event(
+            EventType.AGENT_DECISION,
+            "System",
+            f"Real-contract mode: TaskMarket at {runtime.service.deployment.address} on chain {runtime.service.deployment.chain_id}",
+            {
+                "address": runtime.service.deployment.address,
+                "chain_id": runtime.service.deployment.chain_id,
+                "network": runtime.service.deployment.network,
+            },
+        )
 
     task = Task(
         id="task-001",
@@ -135,18 +161,29 @@ async def run_demo() -> None:
     state.emit_event(
         EventType.CONTRACT_TX,
         "Contract",
-        f"Creating task onchain via TaskMarket.sol",
-        {"action": "createTask", "tx_hash": FAKE_TX[:20] + "..."},
+        "Creating task onchain via TaskMarket.sol",
+        {"action": "createTask"},
     )
-    await _step(2.0)
 
-    task.onchain_task_id = 0
-    task.tx_hashes.append(FAKE_TX)
+    if runtime:
+        reward_wei = runtime.service.w3.to_wei(REWARD_ETH, "ether")
+        create_tx, onchain_id = await asyncio.to_thread(
+            runtime.service.create_task,
+            runtime.task_creator.private_key,
+            task.description,
+            reward_wei,
+        )
+    else:
+        await _step(2.0)
+        create_tx, onchain_id = FAKE_TX, 0
+
+    task.onchain_task_id = onchain_id
+    task.tx_hashes.append(create_tx)
     state.emit_event(
         EventType.CONTRACT_TX,
         "Contract",
-        f"Task created onchain — taskId: 0, tx: {FAKE_TX[:20]}...",
-        {"task_id_onchain": 0, "tx_hash": FAKE_TX},
+        f"Task created onchain — taskId: {onchain_id}, tx: {create_tx[:20]}...",
+        {"task_id_onchain": onchain_id, "tx_hash": create_tx},
     )
     await _step()
 
@@ -157,7 +194,29 @@ async def run_demo() -> None:
         "Researcher and Executor joining task onchain",
         {"action": "joinTask"},
     )
-    await _step(1.5)
+
+    if runtime:
+        researcher_join_tx = await asyncio.to_thread(
+            runtime.service.join_task, runtime.researcher.private_key, onchain_id
+        )
+        executor_join_tx = await asyncio.to_thread(
+            runtime.service.join_task, runtime.executor.private_key, onchain_id
+        )
+        task.tx_hashes.extend([researcher_join_tx, executor_join_tx])
+        state.emit_event(
+            EventType.CONTRACT_TX,
+            "Contract",
+            f"Researcher joined — tx: {researcher_join_tx[:20]}...",
+            {"agent": "researcher-001", "tx_hash": researcher_join_tx},
+        )
+        state.emit_event(
+            EventType.CONTRACT_TX,
+            "Contract",
+            f"Executor joined — tx: {executor_join_tx[:20]}...",
+            {"agent": "executor-001", "tx_hash": executor_join_tx},
+        )
+    else:
+        await _step(1.5)
 
     # --- Step 8: Task execution ---
     task.status = TaskStatus.EXECUTING
@@ -195,26 +254,52 @@ async def run_demo() -> None:
         "Marking task as completed onchain",
         {"action": "completeTask"},
     )
-    await _step(1.5)
+
+    if runtime:
+        complete_tx = await asyncio.to_thread(
+            runtime.service.complete_task,
+            runtime.task_creator.private_key,
+            task.onchain_task_id,
+        )
+        task.tx_hashes.append(complete_tx)
+        state.emit_event(
+            EventType.CONTRACT_TX,
+            "Contract",
+            f"Task completed onchain — tx: {complete_tx[:20]}...",
+            {"tx_hash": complete_tx},
+        )
+    else:
+        await _step(1.5)
 
     # --- Step 10: Distribute reward ---
     state.emit_event(
         EventType.CONTRACT_TX,
         "Contract",
-        f"Distributing reward: 0.005 ETH per agent",
-        {"action": "distributeReward", "per_agent": "0.005 ETH"},
+        "Distributing reward via TaskMarket.distributeReward()",
+        {"action": "distributeReward"},
     )
-    await _step(2.0)
 
-    task.tx_hashes.append(FAKE_REWARD_TX)
+    if runtime:
+        reward_tx, per_agent_wei = await asyncio.to_thread(
+            runtime.service.distribute_reward,
+            runtime.task_creator.private_key,
+            task.onchain_task_id,
+        )
+        per_agent_eth = float(runtime.service.w3.from_wei(per_agent_wei, "ether"))
+    else:
+        await _step(2.0)
+        reward_tx = FAKE_REWARD_TX
+        per_agent_eth = REWARD_ETH / 2
+
+    task.tx_hashes.append(reward_tx)
     task.status = TaskStatus.SETTLED
     state.set_agent_status("researcher-001", AgentStatus.PAID)
     state.set_agent_status("executor-001", AgentStatus.PAID)
     state.emit_event(
         EventType.CONTRACT_TX,
         "Contract",
-        f"Reward distributed — tx: {FAKE_REWARD_TX[:20]}...",
-        {"tx_hash": FAKE_REWARD_TX},
+        f"Reward distributed: {per_agent_eth} ETH/agent — tx: {reward_tx[:20]}...",
+        {"tx_hash": reward_tx, "per_agent_eth": per_agent_eth},
     )
     await _step()
 

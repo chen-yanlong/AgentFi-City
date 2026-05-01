@@ -14,9 +14,11 @@ class Settings(BaseSettings):
     task_creator_private_key: str = ""
 
     # Chain
-    rpc_url: str = ""
+    rpc_url: str = "http://localhost:8545"
     chain_id: int = 0
     task_market_contract_address: str = ""
+    contract_network: str = "localhost"  # which contracts/deployments/<name>.json to load
+    use_real_contract: bool = False  # toggle: real onchain calls vs fake tx hashes
 
     # Uniswap
     uniswap_api_key: str = ""
