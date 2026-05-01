@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Agent, DemoEvent, TaskStatus } from "@/lib/types";
+import { startDemo, resetDemo, getDemoState, createEventSource } from "@/lib/api";
 import AgentCard from "@/components/AgentCard";
 import TaskTimeline from "@/components/TaskTimeline";
 import EventLog from "@/components/EventLog";
@@ -37,18 +38,106 @@ export default function Home() {
   const [taskStatus, setTaskStatus] = useState<TaskStatus | null>(null);
   const [events, setEvents] = useState<DemoEvent[]>([]);
   const [isRunning, setIsRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const syncState = useCallback(async () => {
+    try {
+      const state = await getDemoState();
+      setAgents(state.agents);
+      setTaskStatus(state.task?.status ?? null);
+      setIsRunning(state.is_running);
+    } catch {
+      // Silently ignore poll failures
+    }
+  }, []);
+
+  const stopListening = useCallback(() => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
 
   const handleStart = async () => {
-    // Will connect to backend SSE in commit 4
+    setError(null);
+    setEvents([]);
+    setTaskStatus(null);
+    setAgents(INITIAL_AGENTS);
+
+    try {
+      await startDemo();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start demo");
+      return;
+    }
+
     setIsRunning(true);
+
+    // Connect to SSE stream
+    const es = createEventSource();
+    eventSourceRef.current = es;
+
+    // Listen for all event types from the backend
+    const eventTypes = [
+      "task_created",
+      "axl_message",
+      "agent_decision",
+      "contract_tx",
+      "uniswap_quote",
+      "uniswap_swap",
+      "memory_write",
+      "error",
+      "done",
+    ];
+
+    for (const type of eventTypes) {
+      es.addEventListener(type, (e: MessageEvent) => {
+        const event: DemoEvent = JSON.parse(e.data);
+        setEvents((prev) => [...prev, event]);
+
+        if (type === "done") {
+          setIsRunning(false);
+          stopListening();
+          // Final state sync
+          syncState();
+        }
+      });
+    }
+
+    es.onerror = () => {
+      // SSE disconnected — sync state and stop
+      syncState();
+    };
+
+    // Poll state every 2s to keep agents/task in sync
+    pollRef.current = setInterval(syncState, 2000);
   };
 
-  const handleReset = () => {
+  const handleReset = async () => {
+    stopListening();
+    try {
+      await resetDemo();
+    } catch {
+      // Ignore
+    }
     setAgents(INITIAL_AGENTS);
     setTaskStatus(null);
     setEvents([]);
     setIsRunning(false);
+    setError(null);
   };
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => stopListening();
+  }, [stopListening]);
 
   return (
     <div className="flex flex-col min-h-screen">
@@ -61,20 +150,25 @@ export default function Home() {
               Onchain Autonomous Agent Economy
             </p>
           </div>
-          <div className="flex gap-2">
-            <button
-              onClick={handleStart}
-              disabled={isRunning}
-              className="px-4 py-2 text-sm font-medium rounded-md bg-accent-green text-black hover:bg-accent-green/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
-              {isRunning ? "Running..." : "Start Demo"}
-            </button>
-            <button
-              onClick={handleReset}
-              className="px-4 py-2 text-sm font-medium rounded-md border border-card-border text-muted hover:text-foreground hover:border-zinc-500 transition-colors"
-            >
-              Reset
-            </button>
+          <div className="flex items-center gap-3">
+            {error && (
+              <span className="text-xs text-accent-red">{error}</span>
+            )}
+            <div className="flex gap-2">
+              <button
+                onClick={handleStart}
+                disabled={isRunning}
+                className="px-4 py-2 text-sm font-medium rounded-md bg-accent-green text-black hover:bg-accent-green/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {isRunning ? "Running..." : "Start Demo"}
+              </button>
+              <button
+                onClick={handleReset}
+                className="px-4 py-2 text-sm font-medium rounded-md border border-card-border text-muted hover:text-foreground hover:border-zinc-500 transition-colors"
+              >
+                Reset
+              </button>
+            </div>
           </div>
         </div>
       </header>
