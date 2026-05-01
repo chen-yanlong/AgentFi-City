@@ -23,7 +23,14 @@ class Settings(BaseSettings):
 
     # Uniswap
     uniswap_api_key: str = ""
-    uniswap_api_base_url: str = ""
+    uniswap_api_base_url: str = "https://trade-api.gateway.uniswap.org/v1"
+    use_real_uniswap: bool = False
+    uniswap_chain_id: int = 84532  # Base Sepolia
+    uniswap_rpc_url: str = "https://sepolia.base.org"
+    uniswap_token_in: str = ""  # e.g. WETH on Base Sepolia: 0x4200000000000000000000000000000000000006
+    uniswap_token_out: str = ""  # e.g. USDC on Base Sepolia
+    uniswap_swap_amount_wei: str = "1500000000000000"  # 0.0015 ETH
+    uniswap_slippage_tolerance: float = 0.5  # percent
 
     # 0G
     og_storage_rpc: str = ""

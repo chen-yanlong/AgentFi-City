@@ -1,19 +1,22 @@
 """Demo orchestration — runs the full lifecycle.
 
-Contract steps switch between real onchain calls (via TaskMarketService) and
-fake tx hashes based on the USE_REAL_CONTRACT config flag. Uniswap and 0G
-steps remain fake until those services are wired in later commits.
+Each external integration (TaskMarket contract, Uniswap, 0G Compute, 0G Storage)
+has a real-mode and fake-mode path. Real mode kicks in when the relevant config
+flags + secrets are set; otherwise the orchestrator emits realistic fake values
+so the demo flow always completes.
 """
 
 import asyncio
 import uuid
 
+from backend.config import get_settings
 from backend.state import demo_state
 from backend.schemas.agent import AgentStatus
 from backend.schemas.task import Task, TaskStatus
 from backend.schemas.events import EventType
 from backend.services.contract_runtime import get_contract_runtime
-from backend.services import llm_service
+from backend.services import llm_service, uniswap_service
+from backend.services.uniswap_service import UniswapUnavailable
 
 # Fake tx hashes used when real-contract mode is off
 FAKE_TX = "0x" + "a1b2c3d4e5f6" * 5 + "abcd"
@@ -392,41 +395,107 @@ async def run_demo() -> None:
     )
     await _step()
 
-    # --- Step 11: Uniswap quote ---
+    # --- Step 11+12: Uniswap quote + swap ---
+    settings = get_settings()
+    use_real_uniswap = settings.use_real_uniswap and runtime is not None
+    swapper_address = (
+        runtime.executor.address if runtime else "0x0000000000000000000000000000000000000004"
+    )
+
     state.emit_event(
         EventType.UNISWAP_QUOTE,
         "Executor",
-        "Requesting Uniswap quote: swap 30% of reward (0.0015 ETH → USDC)",
-        {"from_token": "ETH", "to_token": "USDC", "amount": "0.0015"},
+        "Requesting Uniswap quote: swap 30% of reward",
+        {
+            "from_token": settings.uniswap_token_in or "ETH",
+            "to_token": settings.uniswap_token_out or "USDC",
+            "amount_wei": settings.uniswap_swap_amount_wei,
+            "swapper": swapper_address,
+        },
     )
-    await _step(1.5)
 
-    state.emit_event(
-        EventType.UNISWAP_QUOTE,
-        "Uniswap",
-        "Quote received: 0.0015 ETH → 3.42 USDC (rate: 2280 USDC/ETH)",
-        {"quote": "3.42 USDC", "rate": "2280"},
-    )
-    await _step()
+    quote_obj = None
+    if use_real_uniswap:
+        try:
+            quote_obj = await uniswap_service.get_quote(swapper_address=swapper_address)
+            state.emit_event(
+                EventType.UNISWAP_QUOTE,
+                "Uniswap",
+                f"Real quote received (routing={quote_obj.routing})",
+                {
+                    "routing": quote_obj.routing,
+                    "quote": quote_obj.quote_payload,
+                    "permit_required": quote_obj.permit_data is not None,
+                },
+            )
+        except UniswapUnavailable as e:
+            state.emit_event(
+                EventType.UNISWAP_QUOTE,
+                "System",
+                f"Real quote unavailable ({e}); using fake quote for demo",
+                {"fallback": True, "error": str(e)},
+            )
+            use_real_uniswap = False
 
-    # --- Step 12: Uniswap swap execution ---
+    if not use_real_uniswap:
+        await _step(1.5)
+        state.emit_event(
+            EventType.UNISWAP_QUOTE,
+            "Uniswap",
+            "Quote received: 0.0015 ETH → 3.42 USDC (rate: 2280 USDC/ETH)",
+            {"quote": "3.42 USDC", "rate": "2280"},
+        )
+        await _step()
+
     state.emit_event(
         EventType.UNISWAP_SWAP,
         "Executor",
         "Executing swap via Uniswap API...",
         {"action": "swap"},
     )
-    await _step(2.0)
 
-    task.tx_hashes.append(FAKE_SWAP_TX)
+    if use_real_uniswap and quote_obj is not None and runtime is not None:
+        try:
+            swap_result = await uniswap_service.execute_swap(
+                quote_obj, runtime.executor.private_key
+            )
+            task.tx_hashes.append(swap_result.tx_hash)
+            state.emit_event(
+                EventType.UNISWAP_SWAP,
+                "Uniswap",
+                f"Swap executed onchain — tx: {swap_result.tx_hash[:20]}...",
+                {
+                    "tx_hash": swap_result.tx_hash,
+                    "explorer_url": swap_result.explorer_url,
+                    "chain_id": swap_result.chain_id,
+                },
+            )
+        except UniswapUnavailable as e:
+            state.emit_event(
+                EventType.UNISWAP_SWAP,
+                "System",
+                f"Real swap failed ({e}); using fake tx for demo",
+                {"fallback": True, "error": str(e)},
+            )
+            task.tx_hashes.append(FAKE_SWAP_TX)
+            state.emit_event(
+                EventType.UNISWAP_SWAP,
+                "Uniswap",
+                f"Swap executed (fake) — tx: {FAKE_SWAP_TX[:20]}...",
+                {"tx_hash": FAKE_SWAP_TX},
+            )
+    else:
+        await _step(2.0)
+        task.tx_hashes.append(FAKE_SWAP_TX)
+        state.emit_event(
+            EventType.UNISWAP_SWAP,
+            "Uniswap",
+            f"Swap executed — tx: {FAKE_SWAP_TX[:20]}...",
+            {"tx_hash": FAKE_SWAP_TX},
+        )
+
     task.status = TaskStatus.SWAPPED
     state.set_agent_status("executor-001", AgentStatus.SWAPPED)
-    state.emit_event(
-        EventType.UNISWAP_SWAP,
-        "Uniswap",
-        f"Swap executed — tx: {FAKE_SWAP_TX[:20]}...",
-        {"tx_hash": FAKE_SWAP_TX},
-    )
     await _step()
 
     # --- Step 13: Save memory to 0G Storage ---

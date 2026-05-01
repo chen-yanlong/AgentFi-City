@@ -31,11 +31,27 @@ export default function TransactionPanel({ events }: { events: DemoEvent[] }) {
               </div>
               {(() => {
                 const txHash = event.metadata?.tx_hash as string | undefined;
-                return txHash ? (
+                const explorerUrl = event.metadata?.explorer_url as
+                  | string
+                  | undefined;
+                if (!txHash) return null;
+                return (
                   <div className="font-mono text-zinc-500 mt-0.5 truncate">
-                    tx: {txHash}
+                    tx:{" "}
+                    {explorerUrl ? (
+                      <a
+                        href={explorerUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-accent-cyan hover:underline"
+                      >
+                        {txHash}
+                      </a>
+                    ) : (
+                      txHash
+                    )}
                   </div>
-                ) : null;
+                );
               })()}
             </div>
           ))}
