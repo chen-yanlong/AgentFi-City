@@ -8,6 +8,7 @@ so the demo flow always completes.
 
 import asyncio
 import uuid
+from typing import Optional
 
 from backend.config import get_settings
 from backend.state import demo_state
@@ -24,7 +25,88 @@ from backend.services import (
 from backend.services.uniswap_service import UniswapUnavailable
 from backend.services.og_storage_service import OGStorageUnavailable, storage_explorer_url
 from backend.services.memory_index import MemoryPointer
+from backend.services.axl_runtime import AXLRuntime, get_axl_runtime
+from backend.services.axl_service import AXLUnavailable
 from datetime import datetime, timezone
+
+
+async def _axl_exchange(
+    state,
+    axl: Optional[AXLRuntime],
+    from_agent: str,
+    to_agent: str,
+    msg_type: str,
+    body: dict,
+    sender_label: str,
+    sender_msg: str,
+    recv_label: str,
+    recv_msg: str,
+) -> None:
+    """Emit a sender→receiver AXL message pair. If axl runtime is available,
+    perform a real send + recv; otherwise emit log-only events.
+
+    The message metadata always includes `real_axl` so the UI can flag the
+    bounty-visible path.
+    """
+    if axl is None:
+        state.emit_event(
+            EventType.AXL_MESSAGE,
+            sender_label,
+            sender_msg,
+            {"from": from_agent, "to": to_agent, "msg_type": msg_type, "real_axl": False},
+        )
+        if recv_label and recv_msg:
+            state.emit_event(
+                EventType.AXL_MESSAGE,
+                recv_label,
+                recv_msg,
+                {"from": from_agent, "to": to_agent, "real_axl": False},
+            )
+        return
+
+    try:
+        sent, received = await axl.send_and_recv(from_agent, to_agent, msg_type, body)
+    except AXLUnavailable as e:
+        # Fall back to log-only on a transient AXL failure
+        state.emit_event(
+            EventType.AXL_MESSAGE,
+            "System",
+            f"AXL exchange failed ({e}); using log-only event",
+            {"fallback": True, "error": str(e)},
+        )
+        state.emit_event(
+            EventType.AXL_MESSAGE,
+            sender_label,
+            sender_msg,
+            {"from": from_agent, "to": to_agent, "msg_type": msg_type, "real_axl": False},
+        )
+        return
+
+    state.emit_event(
+        EventType.AXL_MESSAGE,
+        sender_label,
+        sender_msg,
+        {
+            "from": from_agent,
+            "to": to_agent,
+            "msg_type": msg_type,
+            "msg_id": sent.msg_id,
+            "real_axl": True,
+        },
+    )
+    if recv_label and recv_msg:
+        state.emit_event(
+            EventType.AXL_MESSAGE,
+            recv_label,
+            recv_msg,
+            {
+                "from": from_agent,
+                "to": to_agent,
+                "from_peer": received.from_peer,
+                "msg_id": received.msg_id,
+                "real_axl": True,
+            },
+        )
 
 # Fake tx hashes used when real-contract mode is off
 FAKE_TX = "0x" + "a1b2c3d4e5f6" * 5 + "abcd"
@@ -65,6 +147,19 @@ async def run_demo() -> None:
             },
         )
 
+    # Resolve real-AXL runtime (None if disabled or any node unreachable)
+    axl = await get_axl_runtime()
+    if axl:
+        state.emit_event(
+            EventType.AGENT_DECISION,
+            "System",
+            f"Real-AXL mode: {len(axl.clients)} nodes connected",
+            {
+                "peer_ids": axl.peer_ids,
+                "real_axl": True,
+            },
+        )
+
     task = Task(
         id="task-001",
         title="Analyze ETH market trend",
@@ -84,24 +179,27 @@ async def run_demo() -> None:
     )
     await _step()
 
-    # --- Step 2: Planner broadcasts via AXL ---
+    # --- Step 2+3: Planner announces to Researcher via AXL ---
     state.set_agent_status("planner-001", AgentStatus.LISTENING)
-    state.emit_event(
-        EventType.AXL_MESSAGE,
-        "Planner",
-        "Broadcasting task announcement via AXL peer-to-peer network",
-        {"from": "planner-001", "to": "broadcast", "msg_type": "TASK_ANNOUNCEMENT"},
-    )
-    task.status = TaskStatus.BROADCASTED
-    await _step()
-
-    # --- Step 3: Researcher receives task, reads memory, decides to join ---
     state.set_agent_status("researcher-001", AgentStatus.LISTENING)
-    state.emit_event(
-        EventType.AXL_MESSAGE,
-        "Researcher",
-        "Received task announcement via AXL",
-        {"from": "planner-001", "to": "researcher-001"},
+    task.status = TaskStatus.BROADCASTED
+
+    announce_body = {
+        "task_id": task.id,
+        "title": task.title,
+        "reward": f"{task.reward_amount} {task.reward_token}",
+    }
+    await _axl_exchange(
+        state,
+        axl,
+        from_agent="planner-001",
+        to_agent="researcher-001",
+        msg_type="TASK_ANNOUNCEMENT",
+        body=announce_body,
+        sender_label="Planner",
+        sender_msg="Broadcast TASK_ANNOUNCEMENT to Researcher via AXL",
+        recv_label="Researcher",
+        recv_msg="Received TASK_ANNOUNCEMENT via AXL",
     )
     await _step(1.0)
 
@@ -175,22 +273,34 @@ async def run_demo() -> None:
     )
     await _step(0.8)
 
-    state.emit_event(
-        EventType.AXL_MESSAGE,
-        "Researcher",
-        "Sent JOIN_PROPOSAL to Planner via AXL",
-        {"from": "researcher-001", "to": "planner-001", "msg_type": "JOIN_PROPOSAL"},
+    await _axl_exchange(
+        state,
+        axl,
+        from_agent="researcher-001",
+        to_agent="planner-001",
+        msg_type="JOIN_PROPOSAL",
+        body={"task_id": task.id, "capability": "research"},
+        sender_label="Researcher",
+        sender_msg="Sent JOIN_PROPOSAL to Planner via AXL",
+        recv_label="Planner",
+        recv_msg="Received JOIN_PROPOSAL from Researcher via AXL",
     )
     task.status = TaskStatus.TEAM_FORMING
     await _step()
 
-    # --- Step 4a: Critic receives and decides to join ---
+    # --- Step 4a: Planner announces to Critic via AXL ---
     state.set_agent_status("critic-001", AgentStatus.LISTENING)
-    state.emit_event(
-        EventType.AXL_MESSAGE,
-        "Critic",
-        "Received task announcement via AXL",
-        {"from": "planner-001", "to": "critic-001"},
+    await _axl_exchange(
+        state,
+        axl,
+        from_agent="planner-001",
+        to_agent="critic-001",
+        msg_type="TASK_ANNOUNCEMENT",
+        body=announce_body,
+        sender_label="Planner",
+        sender_msg="Broadcast TASK_ANNOUNCEMENT to Critic via AXL",
+        recv_label="Critic",
+        recv_msg="Received TASK_ANNOUNCEMENT via AXL",
     )
     await _step(1.0)
 
@@ -203,21 +313,33 @@ async def run_demo() -> None:
     )
     await _step(0.8)
 
-    state.emit_event(
-        EventType.AXL_MESSAGE,
-        "Critic",
-        "Sent JOIN_PROPOSAL to Planner via AXL",
-        {"from": "critic-001", "to": "planner-001", "msg_type": "JOIN_PROPOSAL"},
+    await _axl_exchange(
+        state,
+        axl,
+        from_agent="critic-001",
+        to_agent="planner-001",
+        msg_type="JOIN_PROPOSAL",
+        body={"task_id": task.id, "capability": "validation"},
+        sender_label="Critic",
+        sender_msg="Sent JOIN_PROPOSAL to Planner via AXL",
+        recv_label="Planner",
+        recv_msg="Received JOIN_PROPOSAL from Critic via AXL",
     )
     await _step()
 
-    # --- Step 4b: Executor receives and decides to join ---
+    # --- Step 4b: Planner announces to Executor via AXL ---
     state.set_agent_status("executor-001", AgentStatus.LISTENING)
-    state.emit_event(
-        EventType.AXL_MESSAGE,
-        "Executor",
-        "Received task announcement via AXL",
-        {"from": "planner-001", "to": "executor-001"},
+    await _axl_exchange(
+        state,
+        axl,
+        from_agent="planner-001",
+        to_agent="executor-001",
+        msg_type="TASK_ANNOUNCEMENT",
+        body=announce_body,
+        sender_label="Planner",
+        sender_msg="Broadcast TASK_ANNOUNCEMENT to Executor via AXL",
+        recv_label="Executor",
+        recv_msg="Received TASK_ANNOUNCEMENT via AXL",
     )
     await _step(1.0)
 
@@ -230,11 +352,17 @@ async def run_demo() -> None:
     )
     await _step(0.8)
 
-    state.emit_event(
-        EventType.AXL_MESSAGE,
-        "Executor",
-        "Sent JOIN_PROPOSAL to Planner via AXL",
-        {"from": "executor-001", "to": "planner-001", "msg_type": "JOIN_PROPOSAL"},
+    await _axl_exchange(
+        state,
+        axl,
+        from_agent="executor-001",
+        to_agent="planner-001",
+        msg_type="JOIN_PROPOSAL",
+        body={"task_id": task.id, "capability": "execution"},
+        sender_label="Executor",
+        sender_msg="Sent JOIN_PROPOSAL to Planner via AXL",
+        recv_label="Planner",
+        recv_msg="Received JOIN_PROPOSAL from Executor via AXL",
     )
     await _step()
 
@@ -249,12 +377,27 @@ async def run_demo() -> None:
     task.participants = ["researcher-001", "critic-001", "executor-001"]
     await _step(0.8)
 
-    state.emit_event(
-        EventType.AXL_MESSAGE,
-        "Planner",
-        "Sent TEAM_CONFIRMED to all participants via AXL",
-        {"from": "planner-001", "to": "broadcast", "msg_type": "TEAM_CONFIRMED"},
-    )
+    confirm_body = {
+        "task_id": task.id,
+        "participants": ["researcher-001", "critic-001", "executor-001"],
+    }
+    for to_agent, label in [
+        ("researcher-001", "Researcher"),
+        ("critic-001", "Critic"),
+        ("executor-001", "Executor"),
+    ]:
+        await _axl_exchange(
+            state,
+            axl,
+            from_agent="planner-001",
+            to_agent=to_agent,
+            msg_type="TEAM_CONFIRMED",
+            body=confirm_body,
+            sender_label="Planner",
+            sender_msg=f"Sent TEAM_CONFIRMED to {label} via AXL",
+            recv_label=label,
+            recv_msg="Received TEAM_CONFIRMED via AXL",
+        )
     await _step()
 
     # --- Step 6: Onchain task creation ---
@@ -345,16 +488,17 @@ async def run_demo() -> None:
     # --- Step 8b: Critic validates Researcher output ---
     state.set_agent_status("researcher-001", AgentStatus.LISTENING)
     state.set_agent_status("critic-001", AgentStatus.REVIEWING)
-    state.emit_event(
-        EventType.AXL_MESSAGE,
-        "Researcher",
-        "Sent OUTPUT_FOR_REVIEW to Critic via AXL",
-        {
-            "from": "researcher-001",
-            "to": "critic-001",
-            "msg_type": "OUTPUT_FOR_REVIEW",
-            "output": research_output,
-        },
+    await _axl_exchange(
+        state,
+        axl,
+        from_agent="researcher-001",
+        to_agent="critic-001",
+        msg_type="OUTPUT_FOR_REVIEW",
+        body={"task_id": task.id, "output": research_output},
+        sender_label="Researcher",
+        sender_msg="Sent OUTPUT_FOR_REVIEW to Critic via AXL",
+        recv_label="Critic",
+        recv_msg="Received OUTPUT_FOR_REVIEW via AXL",
     )
     await _step(1.0)
 
@@ -389,11 +533,21 @@ async def run_demo() -> None:
     await _step(0.8)
 
     msg_type = "APPROVE" if critique.approved else "REJECT"
-    state.emit_event(
-        EventType.AXL_MESSAGE,
-        "Critic",
-        f"Sent {msg_type} to Executor via AXL",
-        {"from": "critic-001", "to": "executor-001", "msg_type": msg_type},
+    await _axl_exchange(
+        state,
+        axl,
+        from_agent="critic-001",
+        to_agent="executor-001",
+        msg_type=msg_type,
+        body={
+            "task_id": task.id,
+            "approved": critique.approved,
+            "reason": critique.reason,
+        },
+        sender_label="Critic",
+        sender_msg=f"Sent {msg_type} to Executor via AXL",
+        recv_label="Executor",
+        recv_msg=f"Received {msg_type} from Critic via AXL",
     )
     state.set_agent_status("critic-001", AgentStatus.IDLE)
     await _step()

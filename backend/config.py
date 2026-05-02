@@ -39,10 +39,11 @@ class Settings(BaseSettings):
     og_compute_sidecar_url: str = "http://localhost:7100"
 
     # AXL
-    axl_planner_url: str = "http://localhost:7001"
-    axl_researcher_url: str = "http://localhost:7002"
-    axl_critic_url: str = "http://localhost:7003"
-    axl_executor_url: str = "http://localhost:7004"
+    axl_planner_url: str = "http://localhost:9100"
+    axl_researcher_url: str = "http://localhost:9101"
+    axl_critic_url: str = "http://localhost:9102"
+    axl_executor_url: str = "http://localhost:9103"
+    use_real_axl: bool = False
 
     # LLM
     openai_api_key: str = ""
