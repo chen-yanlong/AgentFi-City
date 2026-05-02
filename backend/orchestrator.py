@@ -15,8 +15,9 @@ from backend.schemas.agent import AgentStatus
 from backend.schemas.task import Task, TaskStatus
 from backend.schemas.events import EventType
 from backend.services.contract_runtime import get_contract_runtime
-from backend.services import llm_service, uniswap_service
+from backend.services import llm_service, uniswap_service, og_storage_service
 from backend.services.uniswap_service import UniswapUnavailable
+from backend.services.og_storage_service import OGStorageUnavailable, storage_explorer_url
 
 # Fake tx hashes used when real-contract mode is off
 FAKE_TX = "0x" + "a1b2c3d4e5f6" * 5 + "abcd"
@@ -505,22 +506,50 @@ async def run_demo() -> None:
         "Saving agent memory and task result to 0G Storage...",
         {"agent_id": "executor-001", "task_id": "task-001"},
     )
-    await _step(1.5)
 
     memory_obj = {
         "agent_id": "executor-001",
         "task_id": "task-001",
         "decision": "Joined because expected reward was positive and required capability matched executor role.",
-        "reward_received": "0.005 ETH",
+        "reward_received": f"{per_agent_eth} ETH",
         "financial_action": "Swapped 30% of reward (0.0015 ETH) to 3.42 USDC",
         "research_summary": "ETH sentiment cautiously optimistic with increased institutional inflows.",
+        "critic_verdict": {
+            "approved": critique.approved,
+            "model": critique.model,
+            "confidence": critique.confidence,
+        },
     }
+
+    storage_key: str = FAKE_MEMORY_KEY
+    explorer_url: str = ""
+    real_upload = False
+    try:
+        upload_result = await og_storage_service.upload_json(memory_obj)
+        storage_key = upload_result.root_hash
+        explorer_url = storage_explorer_url(upload_result.root_hash)
+        real_upload = True
+        state.get_agent("executor-001").memory_key = upload_result.root_hash
+    except OGStorageUnavailable as e:
+        await _step(1.5)
+        state.emit_event(
+            EventType.MEMORY_WRITE,
+            "System",
+            f"Real 0G upload unavailable ({e}); using fake key for demo",
+            {"fallback": True, "error": str(e)},
+        )
+
     task.status = TaskStatus.MEMORY_SAVED
     state.emit_event(
         EventType.MEMORY_WRITE,
         "0G Storage",
-        f"Memory saved — key: {FAKE_MEMORY_KEY}",
-        {"storage_key": FAKE_MEMORY_KEY, "memory": memory_obj},
+        f"Memory {'uploaded' if real_upload else 'saved (fake)'} — key: {storage_key}",
+        {
+            "storage_key": storage_key,
+            "memory": memory_obj,
+            "explorer_url": explorer_url,
+            "real_upload": real_upload,
+        },
     )
     await _step()
 
