@@ -49,6 +49,7 @@ export type EventType =
   | "contract_tx"
   | "uniswap_quote"
   | "uniswap_swap"
+  | "memory_read"
   | "memory_write"
   | "error"
   | "done";

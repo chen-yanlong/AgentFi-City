@@ -41,6 +41,9 @@ contracts/deployments/hardhat.json
 # Logs
 *.log
 
+# Local agent memory pointer index (per-machine state)
+data/memory_index.json
+
 # Coverage
 coverage/
 .coverage

@@ -15,9 +15,16 @@ from backend.schemas.agent import AgentStatus
 from backend.schemas.task import Task, TaskStatus
 from backend.schemas.events import EventType
 from backend.services.contract_runtime import get_contract_runtime
-from backend.services import llm_service, uniswap_service, og_storage_service
+from backend.services import (
+    llm_service,
+    uniswap_service,
+    og_storage_service,
+    memory_index,
+)
 from backend.services.uniswap_service import UniswapUnavailable
 from backend.services.og_storage_service import OGStorageUnavailable, storage_explorer_url
+from backend.services.memory_index import MemoryPointer
+from datetime import datetime, timezone
 
 # Fake tx hashes used when real-contract mode is off
 FAKE_TX = "0x" + "a1b2c3d4e5f6" * 5 + "abcd"
@@ -88,7 +95,7 @@ async def run_demo() -> None:
     task.status = TaskStatus.BROADCASTED
     await _step()
 
-    # --- Step 3: Researcher receives and decides to join ---
+    # --- Step 3: Researcher receives task, reads memory, decides to join ---
     state.set_agent_status("researcher-001", AgentStatus.LISTENING)
     state.emit_event(
         EventType.AXL_MESSAGE,
@@ -98,12 +105,73 @@ async def run_demo() -> None:
     )
     await _step(1.0)
 
+    # Read past memories from 0G Storage before deciding
+    past_memories = await memory_index.load_memories("researcher-001", limit=5)
+    prior_runs = len(past_memories)
+    fetched_count = sum(1 for m in past_memories if m.content is not None)
+
+    if prior_runs == 0:
+        msg = "No past memories — first task for this agent"
+    elif fetched_count > 0:
+        msg = (
+            f"Read {fetched_count}/{prior_runs} past memories from 0G Storage"
+        )
+    else:
+        msg = (
+            f"Found {prior_runs} prior pointer(s); content not fetched "
+            "(sidecar offline or fake uploads)"
+        )
+
+    state.emit_event(
+        EventType.MEMORY_READ,
+        "Researcher",
+        msg,
+        {
+            "agent_id": "researcher-001",
+            "pointers_count": prior_runs,
+            "fetched_count": fetched_count,
+            "memories": [
+                {
+                    "root_hash": m.pointer.root_hash,
+                    "task_id": m.pointer.task_id,
+                    "timestamp": m.pointer.timestamp,
+                    "real_upload": m.pointer.real_upload,
+                    "content": m.content,
+                }
+                for m in past_memories
+            ],
+        },
+    )
+    if prior_runs > 0:
+        await _step(0.5)
+
     state.set_agent_status("researcher-001", AgentStatus.NEGOTIATING)
+    if prior_runs == 0:
+        decision_msg = (
+            'Decision: JOIN — task matches research capability. '
+            'Reason: "I can summarize recent market conditions." (cold start, no prior memory)'
+        )
+        confidence = 0.6
+    else:
+        decision_msg = (
+            f"Decision: JOIN — task matches research capability. "
+            f"Memory-informed: {prior_runs} prior task(s) recorded "
+            f"({fetched_count} fetched from 0G); raising confidence."
+        )
+        confidence = 0.9
+
     state.emit_event(
         EventType.AGENT_DECISION,
         "Researcher",
-        'Decision: JOIN — task matches research capability. Reason: "I can summarize recent market conditions."',
-        {"agent_id": "researcher-001", "decision": "join", "capability": "research"},
+        decision_msg,
+        {
+            "agent_id": "researcher-001",
+            "decision": "join",
+            "capability": "research",
+            "prior_runs": prior_runs,
+            "fetched_count": fetched_count,
+            "confidence": confidence,
+        },
     )
     await _step(0.8)
 
@@ -551,6 +619,19 @@ async def run_demo() -> None:
             "real_upload": real_upload,
         },
     )
+
+    # Record pointers so future runs can read past memory.
+    # Researcher and Executor both contributed to the task — both get a pointer
+    # to the same memory blob.
+    pointer = MemoryPointer(
+        root_hash=storage_key,
+        task_id=task.id,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        real_upload=real_upload,
+    )
+    for agent_id in ("researcher-001", "executor-001"):
+        memory_index.record(agent_id, pointer)
+
     await _step()
 
     # --- Done ---

@@ -12,6 +12,7 @@ class EventType(str, Enum):
     CONTRACT_TX = "contract_tx"
     UNISWAP_QUOTE = "uniswap_quote"
     UNISWAP_SWAP = "uniswap_swap"
+    MEMORY_READ = "memory_read"
     MEMORY_WRITE = "memory_write"
     ERROR = "error"
     DONE = "done"

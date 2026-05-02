@@ -100,6 +100,7 @@ export default function Home() {
       "contract_tx",
       "uniswap_quote",
       "uniswap_swap",
+      "memory_read",
       "memory_write",
       "error",
       "done",
